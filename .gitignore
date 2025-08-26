@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific - exclude these from git
+old_versions/
+output_archive/
+tests/
+examples/
+*.txt
+*.csv
+*.png
+
+# Keep docs but not output files
+!requirements.txt
+!README.md
+
+# Cline storage
+.cline_storage/
+
+# Pytest
+.pytest_cache/
