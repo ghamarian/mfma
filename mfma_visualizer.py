@@ -9,7 +9,7 @@ import os
 import re
 import subprocess
 import sys
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -394,13 +394,29 @@ def parse_register_notation(reg_str: str) -> Tuple[int, int, str]:
     
     return -1, -1, ""
 
-def create_register_layout_table(blocks: List[pd.DataFrame], matrix_name: str) -> List[go.Figure]:
-    """Create tables for register layout with improved headers showing VGPR grouping"""
+def color_register_cell(val):
+    """Color cells based on register number"""
+    try:
+        if not isinstance(val, str):
+            return ''
+        
+        # Simple check for v0, v1, v2, etc.
+        if 'v0' in str(val):
+            return 'background-color: #E6F3FF'  # Light blue for v0
+        elif 'v1' in str(val):
+            return 'background-color: #FFE6CC'  # Light orange for v1
+        elif 'v' in str(val) and any(f'v{i}' in str(val) for i in range(2, 100)):
+            return 'background-color: #E6FFE6'  # Light green for others
+    except:
+        pass
+    return ''
+
+def create_register_layout_dataframe(blocks: List[pd.DataFrame], matrix_name: str) -> List[Tuple[Any, str]]:
+    """Create styled DataFrames for register layout with improved headers showing VGPR grouping"""
     if not blocks:
-        fig = go.Figure().add_annotation(text="No data available", showarrow=False)
-        return [fig]
+        return []
     
-    figures = []
+    result_dfs = []
     
     for block_df in blocks:
         if block_df is None or block_df.empty:
@@ -410,28 +426,24 @@ def create_register_layout_table(blocks: List[pd.DataFrame], matrix_name: str) -
         block_num = block_df['Block'].iloc[0] if 'Block' in block_df.columns else "Unknown"
         
         # Remove Block column for display
-        display_df = block_df.drop('Block', axis=1) if 'Block' in block_df.columns else block_df
+        display_df = block_df.drop('Block', axis=1) if 'Block' in block_df.columns else block_df.copy()
         
-        # Process data
-        table_data = []
-        cell_colors = []
-        combined_headers = []
-        
-        # First column is the row label
-        combined_headers.append(display_df.columns[0].split('[')[0] + ' Row')
-        table_data.append(display_df.iloc[:, 0].tolist())
-        cell_colors.append(['white'] * len(display_df))
-        
-        # Check if this is f16/bf16 data
+        # Check if this has bit ranges (f16/bf16/fp8/bf8 data)
         has_bit_ranges = False
         if len(display_df.columns) > 1:
             first_val = str(display_df.iloc[0, 1])
-            has_bit_ranges = '[15:0]' in first_val or '[31:16]' in first_val
+            # Check for any bit range pattern [XX:YY]
+            has_bit_ranges = '[' in first_val and ':' in first_val and ']' in first_val
         
         # Track VGPRs for visual grouping
         prev_vgpr = -1
+        new_column_names = {}
         
-        # Process each column
+        # First column is the row label
+        first_col = display_df.columns[0]
+        new_column_names[first_col] = first_col.split('[')[0] + ' Row'
+        
+        # Process each column to create better headers
         for i in range(1, len(display_df.columns)):
             col = display_df.columns[i]
             k_val = col if col.isdigit() else str(i - 1)
@@ -445,112 +457,110 @@ def create_register_layout_table(blocks: List[pd.DataFrame], matrix_name: str) -
                 
                 # Create header with visual grouping indicator
                 if has_bit_ranges:
-                    if '[15:0]' in first_val:
-                        bit_text = "[0:15]"
-                    elif '[31:16]' in first_val:
-                        bit_text = "[16:31]"
+                    # Extract the bit range from the value
+                    import re
+                    bit_match = re.search(r'\[(\d+):(\d+)\]', first_val)
+                    if bit_match:
+                        start_bit = bit_match.group(2)
+                        end_bit = bit_match.group(1)
+                        bit_text = f"[{start_bit}:{end_bit}]"
                     else:
-                        bit_text = "[0:31]"
+                        bit_text = "[?:?]"
                     
                     # Add grouping indicator if same VGPR as previous
                     if vgpr == prev_vgpr:
-                        header = f"├─ VGPR{vgpr}<br>{bit_text}<br>K={k_val}"
+                        header = f"├─ VGPR{vgpr} {bit_text} K={k_val}"
                     else:
-                        header = f"┌─ VGPR{vgpr}<br>{bit_text}<br>K={k_val}"
+                        header = f"┌─ VGPR{vgpr} {bit_text} K={k_val}"
                 else:
                     # No bit ranges (full 32-bit registers)
-                    header = f"VGPR{vgpr}<br>K={k_val}"
+                    header = f"VGPR{vgpr} K={k_val}"
                 
                 prev_vgpr = vgpr
             else:
                 header = f"K={k_val}"
                 prev_vgpr = -1
             
-            combined_headers.append(header)
-            
-            # Process column data and colors
-            col_data = []
-            col_colors = []
-            for val in display_df.iloc[:, i]:
-                parsed = parse_register_notation(str(val))
-                if parsed[0] != -1:
-                    reg, lane, _ = parsed
-                    col_data.append(f"v{reg}{{{lane}}}")
-                    # Color based on register
-                    if reg == 0:
-                        col_colors.append('#E6F3FF')  # Light blue for v0
-                    elif reg == 1:
-                        col_colors.append('#FFE6CC')  # Light orange for v1
-                    else:
-                        col_colors.append('#E6FFE6')  # Light green for others
-                else:
-                    col_data.append(str(val))
-                    col_colors.append('white')
-            
-            table_data.append(col_data)
-            cell_colors.append(col_colors)
+            new_column_names[col] = header
         
-        # Create the table figure
-        fig = go.Figure(data=[go.Table(
-            header=dict(
-                values=combined_headers,
-                fill_color='lightblue',
-                align='center',
-                font=dict(size=11, color='black', family='monospace'),
-                line_color='darkslategray',
-                height=70
-            ),
-            cells=dict(
-                values=table_data,
-                fill_color=cell_colors,
-                align='center',
-                font=dict(size=9, color='black'),
-                line_color='darkslategray',
-                height=25
+        # Rename columns
+        styled_df = display_df.rename(columns=new_column_names)
+        
+        # Clean up register notation for better readability
+        for col in styled_df.columns[1:]:  # Skip first column (row labels)
+            styled_df[col] = styled_df[col].apply(lambda x: 
+                f"v{parse_register_notation(str(x))[0]}{{{parse_register_notation(str(x))[1]}}}" 
+                if parse_register_notation(str(x))[0] != -1 else str(x)
             )
-        )])
         
-        fig.update_layout(
-            title=f"{matrix_name} Register Layout - Block {block_num}",
-            height=min(500, max(250, len(display_df) * 30 + 130)),
-            margin=dict(l=10, r=10, t=40, b=10)
-        )
+        # Apply styling using map instead of deprecated applymap
+        styled = styled_df.style.map(color_register_cell)
         
-        figures.append(fig)
+        # Apply header styles directly to the styler
+        styled = styled.set_properties(**{
+            'text-align': 'center',
+            'font-size': '11px',
+            'padding': '2px'
+        })
+        
+        # Try a different approach for header styling that Streamlit might respect
+        styled = styled.set_table_styles([
+            {'selector': 'thead tr th',
+             'props': [('background-color', '#1f77b4'),
+                      ('color', 'white'),
+                      ('font-weight', 'bold')]},
+            {'selector': 'th.col_heading',
+             'props': [('background-color', '#1f77b4'),
+                      ('color', 'white')]},
+            {'selector': 'th.col_heading.level0',
+             'props': [('background-color', '#1f77b4'),
+                      ('color', 'white')]},
+            {'selector': 'th.blank',
+             'props': [('background-color', '#1f77b4')]}
+        ], overwrite=False)
+        
+        title = f"{matrix_name} Register Layout - Block {block_num}"
+        result_dfs.append((styled, title))
     
-    return figures
+    return result_dfs
 
-def create_matrix_layout_table(df: pd.DataFrame, matrix_name: str) -> go.Figure:
-    """Create table for matrix layout (Elements → Register mapping)"""
+def create_matrix_layout_dataframe(df: pd.DataFrame, matrix_name: str) -> Tuple[Any, str]:
+    """Create styled DataFrame for matrix layout (Elements → Register mapping)"""
     if df is None or df.empty:
-        fig = go.Figure().add_annotation(text="No data available", showarrow=False)
-        return fig
+        return None, f"{matrix_name} Matrix Layout (Elements → Registers) - No data available"
     
-    # Create a color-coded table
-    fig = go.Figure(data=[go.Table(
-        header=dict(
-            values=list(df.columns),
-            fill_color='lightcoral',
-            align='center',
-            font=dict(size=12, color='white'),
-            line_color='darkslategray'
-        ),
-        cells=dict(
-            values=[df[col] for col in df.columns],
-            fill_color='lavender',
-            align='center',
-            font=dict(size=10, color='black'),
-            line_color='darkslategray'
-        )
-    )])
+    # Make a copy for styling
+    styled_df = df.copy()
     
-    fig.update_layout(
-        title=f"{matrix_name} Matrix Layout (Elements → Registers)",
-        height=min(600, max(300, len(df) * 25 + 100)),
-        margin=dict(l=10, r=10, t=40, b=10)
-    )
+    # Apply lavender background to all cells using map instead of deprecated applymap
+    styled = styled_df.style.map(lambda x: 'background-color: lavender')
     
-    return fig
+    # Apply cell properties
+    styled = styled.set_properties(**{
+        'text-align': 'center',
+        'font-size': '11px',
+        'padding': '2px'
+    })
+    
+    # Try a different approach for header styling that Streamlit might respect
+    styled = styled.set_table_styles([
+        {'selector': 'thead tr th',
+         'props': [('background-color', '#d62728'),
+                  ('color', 'white'),
+                  ('font-weight', 'bold')]},
+        {'selector': 'th.col_heading',
+         'props': [('background-color', '#d62728'),
+                  ('color', 'white')]},
+        {'selector': 'th.col_heading.level0',
+         'props': [('background-color', '#d62728'),
+                  ('color', 'white')]},
+        {'selector': 'th.blank',
+         'props': [('background-color', '#d62728')]}
+    ], overwrite=False)
+    
+    title = f"{matrix_name} Matrix Layout (Elements → Registers)"
+    
+    return styled, title
 
 def main():
     st.set_page_config(
@@ -782,9 +792,55 @@ def main():
             st.markdown("**🗂️ Register Layout** *(full matrix view)*")
             
             if register_blocks:
-                figures = create_register_layout_table(register_blocks, matrix)
-                for fig in figures:
-                    st.plotly_chart(fig, use_container_width=True)
+                dataframes = create_register_layout_dataframe(register_blocks, matrix)
+                for styled_df, title in dataframes:
+                    st.markdown(f"##### {title}")
+                    # Get the actual data length from the styled DataFrame
+                    try:
+                        data_len = len(styled_df.data)
+                    except:
+                        # Fallback for styled DataFrames
+                        data_len = len(register_blocks[dataframes.index((styled_df, title))])
+                    # Get block number from the title
+                    block_num = title.split("Block ")[-1] if "Block" in title else "0"
+                    
+                    # Add download button for CSV
+                    csv_data = styled_df.data.to_csv(index=True)
+                    csv_filename = f"{matrix}_register_layout_block_{block_num}_{inst}.csv"
+                    st.download_button(
+                        label="📥 Download as CSV",
+                        data=csv_data,
+                        file_name=csv_filename,
+                        mime="text/csv",
+                        key=f"reg_{matrix}_{block_num}_{inst}"
+                    )
+                    
+                    # Use HTML rendering to preserve styling with width control
+                    import uuid
+                    table_id = f"reg_table_{uuid.uuid4().hex[:8]}"
+                    html = styled_df.to_html(escape=False, index=True, table_id=table_id)
+                    # Add CSS to control table width and prevent overflow with unique ID
+                    styled_html = f"""<div style="overflow-x: auto; max-width: 100%; margin-bottom: 10px;">
+<style>
+#{table_id} {{
+    width: auto;
+    max-width: 100%;
+    table-layout: auto;
+    border-collapse: collapse;
+    font-size: 11px;
+}}
+#{table_id} th, #{table_id} td {{
+    padding: 2px 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 50px;
+    min-width: 30px;
+}}
+</style>
+{html}
+</div>"""
+                    st.write(styled_html, unsafe_allow_html=True)
             else:
                 st.error("Could not retrieve register layout")
                 st.info(f"Matrix {matrix} may not be supported for this instruction/modifier combination")
@@ -796,11 +852,57 @@ def main():
                 # Parse the ASCII table
                 df = calc.parse_matrix_layout_table(matrix_layout_raw)
                 if df is not None:
-                    fig = create_matrix_layout_table(df, matrix)
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # Show element count
-                    st.caption(f"Total lanes: {len(df)}")
+                    styled_df, title = create_matrix_layout_dataframe(df, matrix)
+                    if styled_df is not None:
+                        st.markdown(f"##### {title}")
+                        # Get the actual data length from the styled DataFrame
+                        try:
+                            data_len = len(styled_df.data)
+                        except:
+                            # Fallback - use the original DataFrame length
+                            data_len = len(df)
+                        # Add download button for CSV
+                        csv_data = styled_df.data.to_csv(index=True)
+                        csv_filename = f"{matrix}_matrix_layout_{inst}.csv"
+                        st.download_button(
+                            label="📥 Download as CSV",
+                            data=csv_data,
+                            file_name=csv_filename,
+                            mime="text/csv",
+                            key=f"matrix_{matrix}_{inst}"
+                        )
+                        
+                        # Use HTML rendering to preserve styling with width control
+                        import uuid
+                        table_id = f"matrix_table_{uuid.uuid4().hex[:8]}"
+                        html = styled_df.to_html(escape=False, index=True, table_id=table_id)
+                        # Add CSS to control table width and prevent overflow with unique ID
+                        styled_html = f"""<div style="overflow-x: auto; max-width: 100%; margin-bottom: 10px;">
+<style>
+#{table_id} {{
+    width: auto;
+    max-width: 100%;
+    table-layout: auto;
+    border-collapse: collapse;
+    font-size: 11px;
+}}
+#{table_id} th, #{table_id} td {{
+    padding: 2px 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 70px;
+    min-width: 40px;
+}}
+</style>
+{html}
+</div>"""
+                        st.write(styled_html, unsafe_allow_html=True)
+                        
+                        # Show element count
+                        st.caption(f"Total lanes: {len(df)}")
+                    else:
+                        st.error("Could not process matrix layout data")
                 else:
                     # If parsing fails, show raw output
                     with st.expander("Show raw output"):
