@@ -8,6 +8,7 @@ import io
 import os
 import re
 import subprocess
+import sys
 from typing import Dict, List, Tuple, Optional
 import numpy as np
 import pandas as pd
@@ -39,39 +40,54 @@ class MatrixCalculator:
             calc_dir = os.path.dirname(self.path)
             calc_filename = os.path.basename(self.path)
             
-            # If running from calculator directory, use just the filename
-            if calc_dir:
-                cmd = ["python3", calc_filename] + args
-                cwd = calc_dir
-            else:
-                cmd = ["python3", self.path] + args
-                cwd = None
+            # Try different Python commands
+            python_cmds = ["python3", "python", sys.executable]
             
-            # Run the command
-            result = subprocess.run(
-                cmd, 
-                capture_output=True, 
-                text=True, 
-                timeout=10,
-                cwd=cwd
-            )
+            for python_cmd in python_cmds:
+                try:
+                    # If running from calculator directory, use just the filename
+                    if calc_dir:
+                        cmd = [python_cmd, calc_filename] + args
+                        cwd = calc_dir
+                    else:
+                        cmd = [python_cmd, self.path] + args
+                        cwd = None
+                    
+                    # Run the command
+                    result = subprocess.run(
+                        cmd, 
+                        capture_output=True, 
+                        text=True, 
+                        timeout=30,  # Increased timeout for cloud
+                        cwd=cwd
+                    )
+                    
+                    # If we get a successful run or at least some output, use this Python
+                    if result.returncode == 0 or result.stdout or result.stderr:
+                        if result.returncode != 0:
+                            error_msg = f"Command failed with return code {result.returncode}\n"
+                            error_msg += f"Command: {' '.join(cmd)}\n"
+                            error_msg += f"stderr: {result.stderr}\n"
+                            error_msg += f"stdout: {result.stdout}"
+                            return False, error_msg
+                        
+                        # Also check if stdout is empty but stderr has content
+                        if not result.stdout and result.stderr:
+                            # Some programs write to stderr even on success
+                            return True, result.stderr
+                        elif not result.stdout:
+                            return False, f"No output from command. stderr: {result.stderr}"
+                            
+                        return True, result.stdout
+                except FileNotFoundError:
+                    # This Python command doesn't exist, try next
+                    continue
+                    
+            # If we get here, none of the Python commands worked
+            return False, f"Could not find working Python interpreter. Tried: {', '.join(python_cmds)}"
             
-            if result.returncode != 0:
-                error_msg = f"Command failed with return code {result.returncode}\n"
-                error_msg += f"stderr: {result.stderr}\n"
-                error_msg += f"stdout: {result.stdout}"
-                return False, error_msg
-            
-            # Also check if stdout is empty but stderr has content
-            if not result.stdout and result.stderr:
-                # Some programs write to stderr even on success
-                return True, result.stderr
-            elif not result.stdout:
-                return False, f"No output from command. stderr: {result.stderr}"
-                
-            return True, result.stdout
         except Exception as e:
-            return False, f"Exception: {str(e)}"
+            return False, f"Exception: {str(e)}\nPath: {self.path}\nArgs: {args}"
     
     def get_register_layout(self, arch: str, inst: str, matrix: str,
                            cbsz: int = 0, abid: int = 0, blgp: int = 0,
@@ -581,10 +597,32 @@ def main():
     )
     
     # Get instruction list
-    instructions = calc.get_instruction_list(arch)
-    if not instructions:
-        st.error(f"Could not get instructions for {arch}")
-        st.stop()
+    with st.spinner(f"Loading instructions for {arch}..."):
+        instructions = calc.get_instruction_list(arch)
+        if not instructions:
+            st.error(f"Could not get instructions for {arch}")
+            
+            # Show debugging information
+            with st.expander("Debug Information"):
+                st.code(f"Calculator path: {calc_path}")
+                st.code(f"Path exists: {os.path.exists(calc_path)}")
+                st.code(f"Architecture: {arch}")
+                
+                # Try running a simple command
+                success, output = calc.run_command(["-h"])
+                st.code(f"Help command success: {success}")
+                if output:
+                    st.text("Help output:")
+                    st.code(output[:500])
+                
+                # Try the list command directly
+                success, output = calc.run_command(["-a", arch, "-L"])
+                st.code(f"List command success: {success}")
+                if output:
+                    st.text("List output:")
+                    st.code(output[:500])
+            
+            st.stop()
     
     # Add search functionality
     st.sidebar.subheader("🔍 Instruction Selection")
