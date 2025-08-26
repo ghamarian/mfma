@@ -2,6 +2,10 @@
 
 A comprehensive tool for visualizing AMD Matrix Fused Multiply-Add (MFMA) instructions and generating optimized C++ kernel code.
 
+## Credits
+
+This project builds upon the excellent work from AMD's [Matrix Instruction Calculator](https://github.com/ROCm/amd_matrix_instruction_calculator) repository. The calculator provides the core functionality for computing register layouts and matrix element mappings for AMD's matrix instructions.
+
 ## Features
 
 - **🔍 Matrix Layout Visualization**: View both Register Layout and Matrix Layout for all matrix operands (A, B, C, D)
@@ -107,3 +111,11 @@ pip install streamlit pandas numpy plotly
 ## Support
 
 For issues or questions about the AMD Matrix Instruction Calculator, refer to the original documentation in `amd_matrix_instruction_calculator/README.md`.
+
+## License
+
+The AMD Matrix Instruction Calculator is used under its original license. Please see `amd_matrix_instruction_calculator/LICENSE` for details.
+
+## Acknowledgments
+
+Special thanks to AMD for providing the Matrix Instruction Calculator tool, which makes this visualization and code generation possible.
